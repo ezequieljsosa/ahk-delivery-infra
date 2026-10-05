@@ -1,0 +1,105 @@
+name: ahk-delivery
+
+services:
+  # ---------- infraestructura ----------
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ahk
+      POSTGRES_PASSWORD: ahk
+      POSTGRES_DB: orders
+    volumes:
+    - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    - pgdata:/var/lib/postgresql/data
+    ports: [5432:5432]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U ahk -d orders]
+      interval: 5s
+      retries: 10
+
+  mongo:
+    image: mongo:7
+    volumes:
+    - mongodata:/data/db
+    ports: [27017:27017]
+    healthcheck:
+      test: [CMD, mongosh, --quiet, --eval, db.adminCommand('ping').ok]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports: [6379:6379]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports: [5672:5672, 15672:15672]       # UI: http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 10s
+      retries: 10
+
+  # ---------- microservicios Java ----------
+  catalog-svc:                # MongoDB
+    image: ${REGISTRY:-ezequieljsosa}/ahk-delivery-catalog-svc:${TAG:-latest}
+    environment:
+      MONGO_URI: mongodb://mongo:27017/catalog
+    ports: [8081:8081]
+    depends_on:
+      mongo: {condition: service_healthy}
+    restart: on-failure
+
+  courier-svc:                # Redis (clave-valor)
+    image: ${REGISTRY:-ezequieljsosa}/ahk-delivery-courier-svc:${TAG:-latest}
+    environment:
+      REDIS_HOST: redis
+    ports: [8083:8083]
+    depends_on:
+      redis: {condition: service_healthy}
+    restart: on-failure
+
+  order-svc:                  # Postgres + RabbitMQ
+    image: ${REGISTRY:-ezequieljsosa}/ahk-delivery-order-svc:${TAG:-latest}
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/orders
+      DB_USER: ahk
+      DB_PASSWORD: ahk
+      RABBIT_HOST: rabbitmq
+      CATALOG_URL: http://catalog-svc:8081
+      COURIER_URL: http://courier-svc:8083
+      PREDICTOR_URL: http://predictor:8000
+    ports: [8082:8082]
+    depends_on:
+      postgres: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+      catalog-svc: {condition: service_started}
+      courier-svc: {condition: service_started}
+      predictor: {condition: service_started}
+    restart: on-failure
+
+  # ---------- ciencia de datos ----------
+  predictor:                  # FastAPI + scikit-learn
+    image: ${REGISTRY:-ezequieljsosa}/ahk-delivery-predictor:${TAG:-latest}
+    environment:
+      MODEL_PATH: /models/eta.joblib
+    volumes:
+    - ./models:/models         # el modelo entrenado queda acá (se puede reemplazar)
+    ports: [8000:8000]
+
+  worker:                     # consumidor async (RabbitMQ -> Postgres analytics)
+    image: ${REGISTRY:-ezequieljsosa}/ahk-delivery-worker:${TAG:-latest}
+    environment:
+      RABBIT_HOST: rabbitmq
+      ANALYTICS_DSN: postgresql://ahk:ahk@postgres:5432/analytics
+    depends_on:
+      postgres: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    restart: on-failure
+
+volumes:
+  pgdata:
+  mongodata:

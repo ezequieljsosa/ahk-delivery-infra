@@ -1,0 +1,21 @@
+# Equivalente Python de checkstyle + pmd + spotbugs: un solo linter/formatter (ruff).
+# Se conservan los chequeos que detectan problemas reales, sin exigir docstrings en todo.
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = [
+    "E", "W",   # estilo (pycodestyle)
+    "F",        # errores y imports sin usar (pyflakes)
+    "I",        # orden de imports
+    "N",        # convenciones de nombres
+    "B",        # bugs probables (bugbear)
+    "UP",       # sintaxis moderna
+    "SIM",      # simplificaciones
+    "C90",      # complejidad ciclomática (como PMD)
+    "S",        # seguridad (como las reglas de seguridad de SpotBugs)
+]
+
+[lint.per-file-ignores]
+# El simulador llama a http://localhost con urllib y usa random a propósito.
+"simulate.py" = ["S311", "S310"]
